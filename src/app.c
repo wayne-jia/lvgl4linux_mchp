@@ -90,32 +90,18 @@ static void draw_mesh(cairo_t* cr, int width, int height)
 
 int render_fb_mesh_pattern(struct kms_framebuffer* fb)
 {
-	void* ptr;
-	int err;
 	cairo_t* cr;
 	cairo_surface_t* surface;
 	cairo_format_t cairo_format = drm2cairo(fb->format);
 
-	err = kms_framebuffer_map(fb, &ptr);
-	if (err < 0) {
-		printf("error: kms_framebuffer_map() failed: %s\n",
-		    strerror(-err));
-		return -1;
-	}
-
-	surface = cairo_image_surface_create_for_data(ptr,
+	surface = cairo_image_surface_create_for_data(fb->ptr,
 						      cairo_format,
 						      fb->width, fb->height,
 						      cairo_format_stride_for_width(cairo_format, fb->width));
 	cr = cairo_create(surface);
-
-
 	draw_mesh(cr, fb->width, fb->height);
-
 	cairo_surface_destroy(surface);
 	cairo_destroy(cr);
-
-	kms_framebuffer_unmap(fb);
 
 	return 0;
 }
@@ -133,7 +119,7 @@ int main(int argc, char *argv[])
 	//struct plane_data** planes;
 	struct stat s;
 	struct sigaction sig_handler;
-	bool use_plain_open = false;
+
     struct plane_data* plane = NULL;
 
 	sig_handler.sa_handler = exit_handler;
@@ -141,10 +127,7 @@ int main(int argc, char *argv[])
 	sig_handler.sa_flags = 0;
 	sigaction(SIGINT, &sig_handler, NULL);
 
-	if (use_plain_open)
-		fd = open(device_file, O_RDWR, 0);
-	else
-		fd = drmOpen(device_file, NULL);
+	fd = drmOpen(device_file, NULL);
 	if (fd < 0) {
 		fprintf(stderr, "error: open() failed: %m\n");
 		return 1;
@@ -161,7 +144,7 @@ int main(int argc, char *argv[])
 	//data = calloc(1, sizeof(struct plane_data));
 
 	plane = plane_create(device,
-				    DRM_PLANE_TYPE_OVERLAY, 
+				    DRM_PLANE_TYPE_OVERLAY,
                     1, //overlay index
 				    800,
 				    480,
@@ -171,6 +154,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
+	plane_fb_map(plane);
     render_fb_mesh_pattern(plane->fbs[0]);
     plane_apply(plane);
 
