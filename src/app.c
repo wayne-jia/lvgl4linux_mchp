@@ -263,7 +263,7 @@ void lvgl_init(void)
 
 	/* Display */
 	lv_display_t * display = lv_display_create(SCREEN_WIDTH, SCREEN_HEIGHT);
-	lv_display_set_buffers(display, plane->bufs[0], plane->bufs[1], SCREEN_WIDTH * SCREEN_HEIGHT * (LV_COLOR_DEPTH / 8), LV_DISPLAY_RENDER_MODE_PARTIAL);
+	lv_display_set_buffers(display, plane->bufs[0], plane->bufs[1], SCREEN_WIDTH * SCREEN_HEIGHT * (LV_COLOR_DEPTH / 8), LV_DISPLAY_RENDER_MODE_DIRECT);
 	lv_display_set_flush_cb(display, lv_disp_drv_flush_cb);
 
 	lv_demo_widgets();
