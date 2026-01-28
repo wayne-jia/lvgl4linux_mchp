@@ -1,7 +1,7 @@
-SDK=/home/wayne/sdk/arm9x7-dev/arm-buildroot-linux-gnueabi_sdk-buildroot
+SDK=/home/wayne/sdk/sama5/arm-buildroot-linux-gnueabihf_sdk-buildroot
 SRC_DIR=../src
 SRCS := $(shell find $(SRC_DIR) -name "*.c")
-CC=$(SDK)/bin/arm-buildroot-linux-gnueabi-gcc
+CC=$(SDK)/bin/arm-buildroot-linux-gnueabihf-gcc
 CFLAGS+=`$(SDK)/bin/pkg-config libplanes --cflags --libs`
 CFLAGS+=`$(SDK)/bin/pkg-config libdrm --cflags --libs`
 CFLAGS+=`$(SDK)/bin/pkg-config libinput --cflags --libs`

@@ -120,9 +120,8 @@ static const struct libinput_interface li_iface = {
     .close_restricted = close_restricted,
 };
 
-
 /* LVGL input callback (v9.4) */
-static void touch_read_cb(lv_indev_t * indev, lv_indev_data_t * data) {
+static void lv_indev_drv_read_cb(lv_indev_t * _, lv_indev_data_t * data) {
     data->point.x = touch_x;
     data->point.y = touch_y;
     data->state   = touch_pressed ? LV_INDEV_STATE_PRESSED
@@ -140,7 +139,7 @@ static void process_libinput(struct libinput *li) {
             touch_x = (lv_coord_t)libinput_event_touch_get_x(t);
             touch_y = (lv_coord_t)libinput_event_touch_get_y(t);
             touch_pressed = true;
-			printf("Touch Down: x=%d, y=%d\n", touch_x, touch_y);
+			//printf("Touch Down: x=%d, y=%d\n", touch_x, touch_y);
             break;
         }
         case LIBINPUT_EVENT_TOUCH_MOTION: {
@@ -237,6 +236,10 @@ void input_init(void)
 		return;
 	}
 	fd_input = libinput_get_fd(g_li);
+
+	lv_indev_t *indev = lv_indev_create();
+    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+    lv_indev_set_read_cb(indev, lv_indev_drv_read_cb);
 }
 
 void input_deinit(void)
@@ -254,19 +257,14 @@ void lvgl_init(void)
 
 	lv_init();
 
-	lv_tick_thread_start();
-
-	/* Input */
-	lv_indev_t * indev = lv_indev_create();
-    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-    lv_indev_set_read_cb(indev, touch_read_cb);
-
 	/* Display */
 	lv_display_t * display = lv_display_create(SCREEN_WIDTH, SCREEN_HEIGHT);
 	lv_display_set_buffers(display, plane->bufs[0], plane->bufs[1], SCREEN_WIDTH * SCREEN_HEIGHT * (LV_COLOR_DEPTH / 8), LV_DISPLAY_RENDER_MODE_DIRECT);
 	lv_display_set_flush_cb(display, lv_disp_drv_flush_cb);
 
 	lv_demo_widgets();
+	//lv_demo_benchmark();
+	//lv_demo_stress();
 	plane_set_pos(plane, 0, 0);
 	plane_apply(plane);
 }
@@ -283,6 +281,15 @@ static void exit_handler(int s) {
 	exit(1);
 }
 
+// static void btn_event_cb(lv_event_t * e)
+// {
+// 	lv_event_code_t code = lv_event_get_code(e);
+// 	if(lv_event_get_code(e) == LV_EVENT_CLICKED) {
+// 		printf("Button clicked!\n");
+// 	} else {
+// 		printf("Event code: %d\n", code);
+// 	}
+// }
 
 int main(int argc, char *argv[])
 {
@@ -293,8 +300,9 @@ int main(int argc, char *argv[])
 	sigaction(SIGINT, &sig_handler, NULL);
 
 	gfx_backend_init();
-    input_init();
 	lvgl_init();
+	input_init();
+	lv_tick_thread_start();
 
 	struct pollfd pfd = { .fd = fd_input, .events = POLLIN, .revents = 0 };
     while (1) { 
