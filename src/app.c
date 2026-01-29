@@ -56,7 +56,7 @@
 #define LV_UNCACHED_BUFFER  0
 #define LV_TICK_INC_VAL_MS  1
 #define LV_TASK_INC_VAL_MS  LV_DEF_REFR_PERIOD
-#define LV_FB_NUM_BUFFERS   2
+#define LV_FB_NUM_BUFFERS   3
 
 #define ONE_MSECOND_IN_NANOSECONDS 1000000
 
@@ -158,19 +158,21 @@ static void process_libinput(struct libinput *li) {
     }
 }
 
-
 static void lv_disp_drv_flush_cb(lv_display_t * disp_drv, const lv_area_t * area, uint8_t * color_p)
 {
-	// for(int y = area->y1; y <= area->y2; y++) {
-    //     memcpy(&plane->bufs[1][y * SCREEN_WIDTH + area->x1],
-    //            color_p,
-    //            (area->x2 - area->x1 + 1) * sizeof(lv_color_t));
-    //     color_p += (area->x2 - area->x1 + 1);
-    // }
-	plane_apply(plane);
-	// printf("Flushed area: (%d, %d) - (%d, %d)\n",
-	//        area->x1, area->y1, area->x2, area->y2);
-	lv_disp_flush_ready(disp_drv);
+    uint32_t bytes_per_pixel = LV_COLOR_DEPTH / 8;
+    int32_t area_w = lv_area_get_width(area);
+    int32_t area_h = lv_area_get_height(area);
+    uint32_t line_width_bytes = area_w * bytes_per_pixel;
+	uint8_t *base_ptr = (uint8_t *)plane->bufs[0];
+
+    for(int32_t y = area->y1; y <= area->y2; y++) {
+        uint8_t * fb_line_ptr = &base_ptr[(y * SCREEN_WIDTH + area->x1) * bytes_per_pixel];
+        memcpy(fb_line_ptr, color_p, line_width_bytes);
+        color_p += line_width_bytes;
+    }
+
+    lv_display_flush_ready(disp_drv);
 }
 
 void gfx_backend_init(void)
@@ -184,8 +186,6 @@ void gfx_backend_init(void)
 	device = kms_device_open(fd_drm);
 	if (!device)
 		return;
-
-	//kms_device_dump(device);
 
 	plane = plane_create_buffered(device,
 				    DRM_PLANE_TYPE_PRIMARY,
@@ -250,7 +250,7 @@ void input_deinit(void)
 
 void lvgl_init(void)
 {
-	if (plane->bufs[0] == NULL || plane->bufs[1] == NULL) {
+	if (plane->bufs[0] == NULL || plane->bufs[1] == NULL || plane->bufs[2] == NULL) {
 		printf("error: plane buffers not mapped\n");
 		return;
 	}
@@ -259,12 +259,13 @@ void lvgl_init(void)
 
 	/* Display */
 	lv_display_t * display = lv_display_create(SCREEN_WIDTH, SCREEN_HEIGHT);
-	lv_display_set_buffers(display, plane->bufs[0], plane->bufs[1], SCREEN_WIDTH * SCREEN_HEIGHT * (LV_COLOR_DEPTH / 8), LV_DISPLAY_RENDER_MODE_DIRECT);
+	lv_display_set_buffers(display, plane->bufs[1], plane->bufs[2], SCREEN_WIDTH * SCREEN_HEIGHT * (LV_COLOR_DEPTH / 8), LV_DISPLAY_RENDER_MODE_PARTIAL);
 	lv_display_set_flush_cb(display, lv_disp_drv_flush_cb);
 
 	lv_demo_widgets();
 	//lv_demo_benchmark();
 	//lv_demo_stress();
+
 	plane_set_pos(plane, 0, 0);
 	plane_apply(plane);
 }
@@ -281,16 +282,6 @@ static void exit_handler(int s) {
 	exit(1);
 }
 
-// static void btn_event_cb(lv_event_t * e)
-// {
-// 	lv_event_code_t code = lv_event_get_code(e);
-// 	if(lv_event_get_code(e) == LV_EVENT_CLICKED) {
-// 		printf("Button clicked!\n");
-// 	} else {
-// 		printf("Event code: %d\n", code);
-// 	}
-// }
-
 int main(int argc, char *argv[])
 {
 	struct sigaction sig_handler;
@@ -306,7 +297,7 @@ int main(int argc, char *argv[])
 
 	struct pollfd pfd = { .fd = fd_input, .events = POLLIN, .revents = 0 };
     while (1) { 
-		int ret = poll(&pfd, 1, LV_TASK_INC_VAL_MS); // 10ms timeout to keep GUI responsive
+		int ret = poll(&pfd, 1, LV_TASK_INC_VAL_MS);
 
 		if (ret > 0 && (pfd.revents & POLLIN)) {
 			process_libinput(g_li);
