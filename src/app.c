@@ -43,6 +43,7 @@
 #include <libinput.h>
 #include <libudev.h>
 #include <linux/input.h>
+#include <cairo.h>
 #include <poll.h>
 #include <errno.h>
 #include "planes/engine.h"
@@ -57,6 +58,7 @@
 #define LV_TICK_INC_VAL_MS  1
 #define LV_TASK_INC_VAL_MS  LV_DEF_REFR_PERIOD
 #define LV_FB_NUM_BUFFERS   3
+#define HEO_FB_NUM_BUFFERS  1
 
 #define ONE_MSECOND_IN_NANOSECONDS 1000000
 
@@ -64,7 +66,9 @@
 #define SCREEN_WIDTH 800
 #define SCREEN_HEIGHT 480
 #define HW_OVERLAY_INDEX 0
-
+#define HEO_OVERLAY_INDEX 2
+#define SCALE_IMAGE_W 400
+#define SCALE_IMAGE_H 240
 
 static pthread_t tick_thread;
 static atomic_bool tick_running = false;
@@ -73,6 +77,8 @@ static const char* device_file = "atmel-hlcdc";
 static int fd_drm;
 static struct kms_device *device = NULL;
 static struct plane_data* plane = NULL;
+static struct plane_data* heo_plane = NULL;
+static char heo_filename[16] = "mars.png";
 
 static int fd_input;
 static struct udev *udev;
@@ -81,6 +87,97 @@ static struct libinput *g_li;
 static lv_coord_t touch_x = 0;
 static lv_coord_t touch_y = 0;
 static bool touch_pressed = false;
+static int key_press_cnt = 0;
+
+static lv_obj_t * labels[4];
+static int current_idx = -1;
+
+void create_right_top_labels(void) {
+    lv_obj_t * cont = lv_obj_create(lv_screen_active());
+    lv_obj_set_size(cont, 100, 220);
+    lv_obj_align(cont, LV_ALIGN_TOP_RIGHT, -10, 10);
+
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(cont, 12, 0);
+
+    lv_obj_set_style_bg_opa(cont, LV_OPA_10, 0);
+    lv_obj_set_style_border_width(cont, 0, 0);
+    lv_obj_set_scrollbar_mode(cont, LV_SCROLLBAR_MODE_OFF);
+
+    const char * texts[] = {"0.5x", "1.0x", "1.5x", "2.0x"};
+
+    for(int i = 0; i < 4; i++) {
+        labels[i] = lv_label_create(cont);
+        lv_label_set_text(labels[i], texts[i]);
+
+        lv_obj_set_style_bg_color(labels[i], lv_color_hex(0x444444), 0);
+        lv_obj_set_style_bg_opa(labels[i], LV_OPA_60, 0);
+        lv_obj_set_style_text_color(labels[i], lv_color_hex(0xFFFFFF), 0);
+
+        lv_obj_set_style_pad_hor(labels[i], 20, 0);
+        lv_obj_set_style_pad_ver(labels[i], 8, 0);
+        lv_obj_set_style_radius(labels[i], 5, 0);
+        lv_obj_set_style_text_align(labels[i], LV_TEXT_ALIGN_CENTER, 0);
+        lv_obj_set_width(labels[i], 80);
+    }
+}
+
+void trigger_next_highlight(void) {
+    if(current_idx >= 0 && current_idx < 4) {
+        lv_obj_set_style_bg_color(labels[current_idx], lv_color_hex(0x444444), 0);
+        lv_obj_set_style_text_color(labels[current_idx], lv_color_hex(0xFFFFFF), 0);
+    }
+
+    current_idx = (current_idx + 1) % 4;
+
+    lv_obj_set_style_bg_color(labels[current_idx], lv_palette_main(LV_PALETTE_GREEN), 0);
+    lv_obj_set_style_bg_opa(labels[current_idx], LV_OPA_COVER, 0);
+    lv_obj_set_style_text_color(labels[current_idx], lv_color_hex(0x000000), 0);
+}
+
+static void *keypad_thread_handler(void *arg) {
+    int fd;
+    struct input_event ev;
+	float scale_factors[] = {0.5, 1.0, 1.5, 2.0};
+
+    fd = open("/dev/input/event1", O_RDONLY);
+    if (fd < 0) {
+        perror("Error: Cannot open /dev/input/event1");
+        return NULL;
+    }
+
+    printf("Keypad thread started, listening on event1...\n");
+
+    while (1) {
+        if (read(fd, &ev, sizeof(struct input_event)) <= 0) {
+            continue;
+        }
+
+        if (ev.type == EV_KEY && ev.value == 1) {
+			if (key_press_cnt > 3)
+				key_press_cnt = 0;
+
+			trigger_next_highlight();
+			printf("Scale to %f\n", scale_factors[key_press_cnt]);
+            plane_set_scale(heo_plane, scale_factors[key_press_cnt]);
+			plane_apply(heo_plane);
+			key_press_cnt++;
+        }
+    }
+
+    close(fd);
+    return NULL;
+}
+
+void start_keypad_listener(void) {
+    pthread_t thread;
+    if (pthread_create(&thread, NULL, keypad_thread_handler, NULL) != 0) {
+        printf("Error: Failed to create keypad thread\n");
+    } else {
+        pthread_detach(thread);
+    }
+}
 
 static void *lv_tick_thread_func(void *arg) {
     (void)arg;
@@ -175,6 +272,19 @@ static void lv_disp_drv_flush_cb(lv_display_t * disp_drv, const lv_area_t * area
     lv_display_flush_ready(disp_drv);
 }
 
+static cairo_format_t drm2cairo(uint32_t format)
+{
+	switch (format)
+	{
+	case DRM_FORMAT_RGB565:
+		return CAIRO_FORMAT_RGB16_565;
+	case DRM_FORMAT_XRGB8888:
+	case DRM_FORMAT_ARGB8888:
+		return CAIRO_FORMAT_ARGB32;
+	}
+	return CAIRO_FORMAT_INVALID;
+}
+
 void gfx_backend_init(void)
 {
 	fd_drm = drmOpen(device_file, NULL);
@@ -199,13 +309,29 @@ void gfx_backend_init(void)
         return;
     }
 
+	heo_plane = plane_create_buffered(device,
+				    DRM_PLANE_TYPE_OVERLAY,
+                    HEO_OVERLAY_INDEX,
+				    SCALE_IMAGE_W,
+				    SCALE_IMAGE_H,
+				    DRM_FORMAT_XRGB8888,
+					HEO_FB_NUM_BUFFERS);
+    if (!heo_plane) {
+        printf("error: failed to create heo plane\n");
+        return;
+    }
+
 	plane_fb_map(plane);
+	plane_fb_map(heo_plane);
 }
 
 void gfx_backend_deinit(void)
 {
 	if (plane)
 		plane_free(plane);
+
+	if (heo_plane)
+		plane_free(heo_plane);
 
 	if (device)
 		kms_device_close(device);
@@ -239,6 +365,7 @@ void input_init(void)
 
 	lv_indev_t *indev = lv_indev_create();
     lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
+	//lv_indev_set_type(indev, LV_INDEV_TYPE_KEYPAD);
     lv_indev_set_read_cb(indev, lv_indev_drv_read_cb);
 }
 
@@ -262,7 +389,7 @@ void lvgl_init(void)
 	lv_display_set_buffers(display, plane->bufs[1], plane->bufs[2], SCREEN_WIDTH * SCREEN_HEIGHT * (LV_COLOR_DEPTH / 8), LV_DISPLAY_RENDER_MODE_PARTIAL);
 	lv_display_set_flush_cb(display, lv_disp_drv_flush_cb);
 
-	lv_demo_widgets();
+	//lv_demo_widgets();
 	//lv_demo_benchmark();
 	//lv_demo_stress();
 
@@ -282,6 +409,136 @@ static void exit_handler(int s) {
 	exit(1);
 }
 
+static void btn_event_cb(lv_event_t * e) {
+    lv_obj_t * btn = lv_event_get_target(e);
+    lv_obj_t * label = lv_obj_get_child(btn, 0);
+    const char * txt = lv_label_get_text(label);
+
+    if(lv_event_get_code(e) == LV_EVENT_CLICKED) {
+        printf("Button Clicked: %s\n", txt);
+		if(strcmp(txt, "1x") == 0) {
+			plane_set_scale(heo_plane, 1.0);
+		}
+		else if(strcmp(txt, "0.5x") == 0) {
+			plane_set_scale(heo_plane, 0.5);
+		}
+		else if(strcmp(txt, "1.5x") == 0) {
+			plane_set_scale(heo_plane, 1.5);
+		}
+		else if(strcmp(txt, "2x") == 0) {
+			plane_set_scale(heo_plane, 2.0);
+		}
+
+		plane_apply(heo_plane);
+    }
+}
+
+void create_bottom_buttons(void) {
+    lv_obj_t * cont = lv_obj_create(lv_scr_act());
+    lv_obj_set_size(cont, lv_pct(100), 70);
+    lv_obj_align(cont, LV_ALIGN_BOTTOM_MID, 0, 0);
+
+    lv_obj_set_layout(cont, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(cont, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(cont, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    const char * btn_texts[] = {"0.5x", "1x", "1.5x", "2x"};
+
+    for(int i = 0; i < 4; i++) {
+        lv_obj_t * btn = lv_btn_create(cont);
+        lv_obj_set_flex_grow(btn, 1);
+        lv_obj_add_event_cb(btn, btn_event_cb, LV_EVENT_CLICKED, NULL);
+
+        lv_obj_t * label = lv_label_create(btn);
+        lv_label_set_text(label, btn_texts[i]);
+        lv_obj_center(label);
+    }
+}
+
+static cairo_surface_t *
+scale_surface(cairo_surface_t *old_surface,
+	      int old_width, int old_height,
+	      int new_width, int new_height)
+{
+	cairo_surface_t *new_surface = cairo_surface_create_similar(old_surface,
+								    CAIRO_CONTENT_COLOR_ALPHA,
+								    new_width,
+								    new_height);
+	cairo_t *cr = cairo_create (new_surface);
+
+	/* Scale *before* setting the source surface (1) */
+	cairo_scale(cr, (double)new_width / old_width, (double)new_height / old_height);
+	cairo_set_source_surface(cr, old_surface, 0, 0);
+
+	/* To avoid getting the edge pixels blended with 0 alpha, which would
+	 * occur with the default EXTEND_NONE. Use EXTEND_PAD for 1.2 or newer (2)
+	 */
+	cairo_pattern_set_extend(cairo_get_source(cr), CAIRO_EXTEND_REFLECT);
+
+	/* Replace the destination with the source instead of overlaying */
+	cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+
+	/* Do the actual drawing */
+	cairo_paint (cr);
+
+	cairo_destroy (cr);
+
+	return new_surface;
+}
+
+int render_fb_image(struct kms_framebuffer* fb, const char* filename)
+{
+	if (heo_plane->bufs[0] == NULL) {
+		printf("error: heo plane buffers not mapped\n");
+		return -1;
+	}
+
+	void* ptr = heo_plane->bufs[0];
+	int err;
+	cairo_t* cr;
+	cairo_surface_t* surface;
+	cairo_surface_t* image;
+	cairo_format_t cairo_format = drm2cairo(fb->format);
+
+	printf("heo format: %d, size: %dx%d\n",
+	    cairo_format,
+	    fb->width, fb->height);
+
+	surface = cairo_image_surface_create_for_data(ptr,
+						      cairo_format,
+						      fb->width, fb->height,
+						      cairo_format_stride_for_width(cairo_format, fb->width));
+	cr = cairo_create(surface);
+
+	image = cairo_image_surface_create_from_png(filename);
+
+	printf("scale image size %dx%d\n",
+	    cairo_image_surface_get_width(image),
+	    cairo_image_surface_get_height(image));
+
+#if 0
+	if (cairo_image_surface_get_width(image) != (int)fb->width ||
+	    cairo_image_surface_get_height(image) != (int)fb->height) {
+
+		printf("image scaled to %dx%d\n", fb->width, fb->height);
+		image = scale_surface(image,
+				      cairo_image_surface_get_width(image),
+				      cairo_image_surface_get_height(image),
+				      fb->width,
+				      fb->height);
+	}
+#endif
+
+	cairo_set_source_surface(cr, image, 0, 0);
+	cairo_paint(cr);
+	cairo_surface_destroy(image);
+
+	cairo_surface_destroy(surface);
+	cairo_destroy(cr);
+
+	return 0;
+}
+
 int main(int argc, char *argv[])
 {
 	struct sigaction sig_handler;
@@ -293,7 +550,14 @@ int main(int argc, char *argv[])
 	gfx_backend_init();
 	lvgl_init();
 	input_init();
+	start_keypad_listener();
 	lv_tick_thread_start();
+
+	render_fb_image(heo_plane->fbs[0], heo_filename);
+	plane_set_pos(heo_plane, 0, 0);
+	plane_apply(heo_plane);
+	//create_bottom_buttons();
+	create_right_top_labels();
 
 	struct pollfd pfd = { .fd = fd_input, .events = POLLIN, .revents = 0 };
     while (1) { 
