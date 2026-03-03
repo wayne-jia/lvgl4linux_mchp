@@ -268,6 +268,7 @@ void lvgl_init(void)
 
 	plane_set_pos(plane, 0, 0);
 	plane_apply(plane);
+	kms_device_flush(device, 0);
 }
 
 void lvgl_deinit(void)
