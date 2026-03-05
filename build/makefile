@@ -1,4 +1,4 @@
-SDK=/home/wayne/sdk/sama5/arm-buildroot-linux-gnueabihf_sdk-buildroot
+SDK=/home/wayne/sdk/a7d65/arm-buildroot-linux-gnueabihf_sdk-buildroot
 SRC_DIR=../src
 SRCS := $(shell find $(SRC_DIR) -name "*.c")
 CC=$(SDK)/bin/arm-buildroot-linux-gnueabihf-gcc
