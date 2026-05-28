@@ -51,6 +51,7 @@
 #include "lvgl.h"
 #include "lv_conf.h"
 #include "lv_demos.h"
+#include "djpeg.h"
 
 /* LVGL Parameters */
 #define LV_UNCACHED_BUFFER  0
@@ -61,10 +62,19 @@
 #define ONE_MSECOND_IN_NANOSECONDS 1000000
 
 /* GFX Parameters */
-#define SCREEN_WIDTH 720
-#define SCREEN_HEIGHT 1280
-#define HW_OVERLAY_INDEX 0
+#define SCREEN_WIDTH 800
+#define SCREEN_HEIGHT 480
 
+/* HEO Parameters */
+#define JPEG_WIDTH 304
+#define JPEG_HEIGHT 304
+#define HEO_FB_NUM_BUFFERS   1
+typedef enum {
+	HW_OVERLAY_BASELAYER = 0,
+	HW_OVERLAY_OVERLAY1,
+	HW_OVERLAY_HEO,
+	HW_OVERLAY_OVERLAY2
+} sam9x_lcdc_layer_t;
 
 static pthread_t tick_thread;
 static atomic_bool tick_running = false;
@@ -73,6 +83,7 @@ static const char* device_file = "atmel-hlcdc";
 static int fd_drm;
 static struct kms_device *device = NULL;
 static struct plane_data* plane = NULL;
+static struct plane_data* plane_heo = NULL;
 
 static int fd_input;
 static struct udev *udev;
@@ -189,7 +200,7 @@ void gfx_backend_init(void)
 
 	plane = plane_create_buffered(device,
 				    DRM_PLANE_TYPE_PRIMARY,
-                    HW_OVERLAY_INDEX,
+                    HW_OVERLAY_BASELAYER,
 				    SCREEN_WIDTH,
 				    SCREEN_HEIGHT,
 				    DRM_FORMAT_RGB565,
@@ -200,12 +211,29 @@ void gfx_backend_init(void)
     }
 
 	plane_fb_map(plane);
+
+	plane_heo = plane_create_buffered(device,
+				    DRM_PLANE_TYPE_OVERLAY,
+                    HW_OVERLAY_HEO,
+				    JPEG_WIDTH,
+				    JPEG_HEIGHT,
+				    DRM_FORMAT_RGB888,
+					HEO_FB_NUM_BUFFERS);
+    if (!plane_heo) {
+        printf("error: failed to create plane_heo\n");
+        return;
+    }
+
+	plane_fb_map(plane_heo);
 }
 
 void gfx_backend_deinit(void)
 {
 	if (plane)
 		plane_free(plane);
+
+	if (plane_heo)
+		plane_free(plane_heo);
 
 	if (device)
 		kms_device_close(device);
@@ -283,6 +311,43 @@ static void exit_handler(int s) {
 	exit(1);
 }
 
+void jpeg_decode_heo(const char *jpeg_path)
+{
+	int width = JPEG_WIDTH;
+    int height = JPEG_HEIGHT;
+
+	char *jpeg_buf = NULL;
+	struct stat st;
+	if (stat(jpeg_path, &st) < 0) {
+		printf("error: failed to stat JPEG file: %s\n", jpeg_path);
+		return;
+	}
+	jpeg_buf = malloc(st.st_size);
+	if (!jpeg_buf) {
+		printf("error: failed to allocate memory for JPEG file\n");
+		return;
+	}
+	FILE *f = fopen(jpeg_path, "rb");
+	if (!f) {
+		printf("error: failed to open JPEG file: %s\n", jpeg_path);
+		free(jpeg_buf);
+		return;
+	}
+	if (fread(jpeg_buf, 1, st.st_size, f) != st.st_size) {
+		printf("error: failed to read JPEG file\n");
+		fclose(f);
+		free(jpeg_buf);
+		return;
+	}
+	fclose(f);
+
+	djpeg_rgb(jpeg_buf, st.st_size, plane_heo->bufs[0], &width, &height);
+	printf("Decoded JPEG to RGB format: width=%d, height=%d\n", width, height);
+	plane_set_pos(plane_heo, 0, 0);
+	plane_apply(plane_heo);
+	free(jpeg_buf); // Safe to free if djpeg_rgb does not retain jpeg_buf
+}
+
 int main(int argc, char *argv[])
 {
 	struct sigaction sig_handler;
@@ -292,6 +357,7 @@ int main(int argc, char *argv[])
 	sigaction(SIGINT, &sig_handler, NULL);
 
 	gfx_backend_init();
+	jpeg_decode_heo("hello.jpg");
 	lvgl_init();
 	input_init();
 	lv_tick_thread_start();
