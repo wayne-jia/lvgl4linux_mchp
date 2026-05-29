@@ -90,10 +90,19 @@ int djpeg_rgb (char *buf, int len, char *p_rgb, int *p_width, int *p_height)
 	*p_height = cinfo.output_height;
 
 	while (cinfo.output_scanline < cinfo.output_height) {
+		unsigned int i;
+		JSAMPLE tmp;
+
 		(void)jpeg_read_scanlines(&cinfo, scanarray_rgb, 1);
 
+		for (i = 0; i < cinfo.output_width; i++) {
+			tmp = buf_rgb[i * 3];
+			buf_rgb[i * 3] = buf_rgb[i * 3 + 2];
+			buf_rgb[i * 3 + 2] = tmp;
+		}
+
 		memcpy(p_rgb, buf_rgb, cinfo.output_width * 3);
-        p_rgb += cinfo.output_width * 3;
+		p_rgb += cinfo.output_width * 3;
 	}
 
 	ret = 0;

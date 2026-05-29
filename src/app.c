@@ -215,8 +215,8 @@ void gfx_backend_init(void)
 	plane_heo = plane_create_buffered(device,
 				    DRM_PLANE_TYPE_OVERLAY,
                     HW_OVERLAY_HEO,
-				    JPEG_WIDTH,
-				    JPEG_HEIGHT,
+				    SCREEN_WIDTH,
+				    SCREEN_HEIGHT,
 				    DRM_FORMAT_RGB888,
 					HEO_FB_NUM_BUFFERS);
     if (!plane_heo) {
@@ -313,8 +313,8 @@ static void exit_handler(int s) {
 
 void jpeg_decode_heo(const char *jpeg_path)
 {
-	int width = JPEG_WIDTH;
-    int height = JPEG_HEIGHT;
+	int width = SCREEN_WIDTH;
+    int height = SCREEN_HEIGHT;
 
 	char *jpeg_buf = NULL;
 	struct stat st;
